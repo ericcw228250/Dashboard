@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>錦英苑巴士看板 - 終極修復版</title>
+  <title>錦英苑巴士看板 - 含 NA40</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -77,7 +77,7 @@
     }
 
     .bus-route { font-size: 4vh; font-weight: 800; color: #ff9f0a; line-height: 1; }
-    .bus-dest { font-size: 2vh; color: #8e8e93; }
+    .bus-dest { font-size: 1.8vh; color: #8e8e93; }
 
     .stop-list { display: flex; flex-direction: column; gap: 1vh; }
     .stop-row {
@@ -89,9 +89,9 @@
       border-radius: 1vh;
     }
 
-    .stop-name { font-size: 2.1vh; font-weight: 600; }
-    .stop-tag { font-size: 1.7vh; color: #ff9f0a; margin-right: 0.4vw; }
-    .eta-val { font-size: 2.3vh; font-weight: 700; color: #64d2ff; }
+    .stop-name { font-size: 2vh; font-weight: 600; }
+    .stop-tag { font-size: 1.6vh; color: #ff9f0a; margin-right: 0.4vw; }
+    .eta-val { font-size: 2.2vh; font-weight: 700; color: #64d2ff; }
     .eta-now { color: #ff9f0a; animation: blink 1s infinite; }
 
     @keyframes blink {
@@ -144,22 +144,23 @@
     fetchWeather();
     setInterval(fetchWeather, 600000);
 
-    // 3. 路線與車站設定 (特別調整: 沙田/紅磡/維港灣/黃大仙方向)
+    // 3. 路線與車站設定 (共 6 條路線，剛好填滿 3x2 網格)
     const BUS_CONFIG = [
       { route: '87D', dest: '往 紅磡站' },
       { route: '87C', dest: '往 維港灣' },
       { route: '85M', dest: '往 黃大仙' },
       { route: '86K', dest: '往 沙田站' },
-      { route: '86S', dest: '往 沙田站' }
+      { route: '86S', dest: '往 沙田站' },
+      { route: 'NA40', dest: '往 機場/港珠澳口岸' }
     ];
 
-    // 錦英苑與新港城在 API 中的最新 Stop ID Hash
-    const STOPS = [
-      { name: '錦英苑 (總站)', tag: '站 1', id: '325492BC6A8A41E1' },
-      { name: '新港城', tag: '站 2', id: 'A9FBDDAFFACD3A3B' }
-    ];
+    // 車站代碼清單 (含 NA40 的專屬新港城站位)
+    const STOP_IDS = {
+      kamYing: '325492BC6A8A41E1',      // 錦英苑 (總站)
+      sunSunshine: 'A9FBDDAFFACD3A3B',  // 新港城 (一般路線)
+      sunSunshineNa: 'B64D9280E102F47D' // 新港城 (NA40 機場線專屬站)
+    };
 
-    // 精確時間計算 (避免時區Bug)
     function parseMinutes(etaStr) {
       if (!etaStr) return null;
       const match = etaStr.match(/T(\d{2}):(\d{2}):(\d{2})/);
@@ -171,91 +172,63 @@
       const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
       let diffSec = etaSec - nowSec;
-      if (diffSec < -43200) diffSec += 86400; // 跨夜處理
+      if (diffSec < -43200) diffSec += 86400; // 跨夜時間處理
 
       return Math.round(diffSec / 60);
     }
 
-    // 帶有代理（Proxy）與網絡重試機制的 API 請求
     async function fetchStopEtaWithProxy(stopId) {
       const targetUrl = `https://data.etabus.gov.hk/v1/transport/kmb/stop-eta/${stopId}`;
       const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
       try {
-        // 先嘗試透過 Proxy 請求，繞過瀏覽器 CORS 限制
         let res = await fetch(proxyUrl);
         if (res.ok) {
           const json = await res.json();
           if (json.data) return json.data;
         }
 
-        // 若 Proxy 失敗，嘗試直連
         res = await fetch(targetUrl);
         if (res.ok) {
           const json = await res.json();
           if (json.data) return json.data;
         }
       } catch (err) {
-        console.warn('API Fetch error:', err);
+        console.warn('Fetch error:', err);
       }
       return [];
     }
 
     async function refreshDashboard() {
-      // 同時抓取兩個車站的所有路線數據
-      const [stop1Data, stop2Data] = await Promise.all([
-        fetchStopEtaWithProxy(STOPS[0].id),
-        fetchStopEtaWithProxy(STOPS[1].id)
+      // 同時抓取錦英苑及新港城（含 NA40 專屬站位）的 API 資料
+      const [kamYingData, sunshineData, sunshineNaData] = await Promise.all([
+        fetchStopEtaWithProxy(STOP_IDS.kamYing),
+        fetchStopEtaWithProxy(STOP_IDS.sunSunshine),
+        fetchStopEtaWithProxy(STOP_IDS.sunSunshineNa)
       ]);
-
-      const dataByStop = {
-        [STOPS[0].id]: stop1Data,
-        [STOPS[1].id]: stop2Data
-      };
 
       const grid = document.getElementById('bus-grid');
 
       grid.innerHTML = BUS_CONFIG.map(bus => {
-        const stopRows = STOPS.map(stop => {
-          const rawList = dataByStop[stop.id] || [];
-          
-          // 過濾出目標路線，且包含有效 ETA 的項目
-          const matches = rawList.filter(item => 
-            item && 
-            item.route === bus.route && 
-            item.eta && 
-            item.eta !== ''
-          );
+        // 1. 處理「站 1：錦英苑 (總站)」
+        const kamYingMatches = kamYingData.filter(item => item && item.route === bus.route && item.eta);
+        
+        // 2. 處理「站 2：新港城」(NA40 抓專屬站位，其餘路線抓一般站位)
+        const targetSunshineData = (bus.route === 'NA40') ? sunshineNaData : sunshineData;
+        const sunshineMatches = targetSunshineData.filter(item => item && item.route === bus.route && item.eta);
 
-          let etaHtml = '未有班次';
+        function formatEta(matches) {
+          if (matches.length === 0) return '未有班次';
+          const minsList = matches
+            .map(m => parseMinutes(m.eta))
+            .filter(m => m !== null && m >= -2)
+            .sort((a, b) => a - b);
 
-          if (matches.length > 0) {
-            // 計算所有班次的時間差並排序
-            const minsList = matches
-              .map(m => parseMinutes(m.eta))
-              .filter(m => m !== null && m >= -2)
-              .sort((a, b) => a - b);
-
-            if (minsList.length > 0) {
-              const nextMin = minsList[0];
-              if (nextMin <= 0) {
-                etaHtml = '<span class="eta-now">即將開出</span>';
-              } else {
-                etaHtml = `${nextMin} 分鐘`;
-              }
-            }
-          }
-
-          return `
-            <div class="stop-row">
-              <div>
-                <span class="stop-tag">${stop.tag}</span>
-                <span class="stop-name">${stop.name}</span>
-              </div>
-              <div class="eta-val">${etaHtml}</div>
-            </div>
-          `;
-        }).join('');
+          if (minsList.length === 0) return '未有班次';
+          const nextMin = minsList[0];
+          if (nextMin <= 0) return '<span class="eta-now">即將開出</span>';
+          return `${nextMin} 分鐘`;
+        }
 
         return `
           <div class="bus-card">
@@ -264,7 +237,20 @@
               <div class="bus-dest">${bus.dest}</div>
             </div>
             <div class="stop-list">
-              ${stopRows}
+              <div class="stop-row">
+                <div>
+                  <span class="stop-tag">站 1</span>
+                  <span class="stop-name">錦英苑 (總站)</span>
+                </div>
+                <div class="eta-val">${formatEta(kamYingMatches)}</div>
+              </div>
+              <div class="stop-row">
+                <div>
+                  <span class="stop-tag">站 2</span>
+                  <span class="stop-name">新港城</span>
+                </div>
+                <div class="eta-val">${formatEta(sunshineMatches)}</div>
+              </div>
             </div>
           </div>
         `;
@@ -272,7 +258,7 @@
     }
 
     refreshDashboard();
-    setInterval(refreshDashboard, 20000); // 每 20 秒自動更新一次
+    setInterval(refreshDashboard, 20000); // 20 秒自動更新
   </script>
 </body>
 </html>
